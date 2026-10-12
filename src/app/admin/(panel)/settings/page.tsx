@@ -11,11 +11,12 @@ import { PageBody, PageHeader, Section } from "@/components/admin/page-chrome"
 import { useCms } from "@/lib/cms-store"
 
 export default function SettingsPage() {
-  const { content, appointments, accounts, saveContent, resetContent, replaceAppointments, updateAccounts } = useCms()
+  const { content, appointments, accounts, notificationConfig, saveContent, resetContent, replaceAppointments, updateAccounts, saveNotificationConfig } =
+    useCms()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const exportBackup = () => {
-    const blob = new Blob([JSON.stringify({ content, appointments, accounts }, null, 2)], { type: "application/json" })
+    const blob = new Blob([JSON.stringify({ content, appointments, accounts, notifications: notificationConfig }, null, 2)], { type: "application/json" })
     const a = document.createElement("a")
     a.href = URL.createObjectURL(blob)
     a.download = `cme-website-backup-${new Date().toISOString().slice(0, 10)}.json`
@@ -38,6 +39,7 @@ export default function SettingsPage() {
       await saveContent(parsed.data.content)
       if (parsed.data.appointments) await replaceAppointments(parsed.data.appointments)
       if (parsed.data.accounts) await updateAccounts(() => parsed.data.accounts!)
+      if (parsed.data.notifications) await saveNotificationConfig(parsed.data.notifications)
       toast.success("Backup restored")
     } catch {
       toast.error("Could not read that file")
@@ -48,7 +50,7 @@ export default function SettingsPage() {
     <PageBody>
       <PageHeader title="Settings & backup" description="Content is stored in this browser. Export a backup to move it to another computer or keep it safe." />
 
-      <Section title="Backup" description="Includes all website content, uploaded images, appointment requests and dentist accounts (passwords stay hashed). Keep the file private.">
+      <Section title="Backup" description="Includes all website content, uploaded images, appointment requests, dentist accounts (passwords stay hashed) and message templates. Keep the file private.">
         <div className="flex flex-wrap gap-2">
           <Button onClick={exportBackup}>
             <Download /> Export backup

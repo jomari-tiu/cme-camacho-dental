@@ -10,6 +10,9 @@ export type BookingForm = {
   date: string
   time: string
   notes: string
+  email: string
+  /** Agreed to receive appointment updates by SMS/email. */
+  consent: boolean
   slot: string
   slotKey: string
 }
@@ -37,6 +40,8 @@ export const blankForm = (treatment: string, time: string): BookingForm => ({
   date: "",
   time,
   notes: "",
+  email: "",
+  consent: false,
   slot: "",
   slotKey: "",
 })

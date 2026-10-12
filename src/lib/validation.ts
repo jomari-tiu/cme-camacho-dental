@@ -49,6 +49,8 @@ export const bookingRequestSchema = z.object({
     .regex(PH_MOBILE_RE, "Please enter a valid mobile number: +63 9XX XXX XXXX."),
   date: z.string().refine((v) => v === "" || (/^\d{4}-\d{2}-\d{2}$/.test(v) && v >= todayIso()), "Please pick today or a later date."),
   notes: z.string().max(500, "Notes can be up to 500 characters."),
+  email: z.union([z.literal(""), z.email("Enter a valid email address, e.g. name@example.com.")]),
+  consent: z.boolean(),
 })
 
 /** Flattens zod issues into { "a.b.0.c": "message" } (first message per field). */

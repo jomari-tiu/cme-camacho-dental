@@ -7,6 +7,8 @@ import {
   CalendarClock,
   CalendarDays,
   ExternalLink,
+  MessageSquareText,
+  Send,
   FileText,
   HelpCircle,
   KeyRound,
@@ -44,7 +46,7 @@ import { dentistCanAccess, logout, useSession, type Session } from "@/lib/auth"
 import { readAccounts, useCms } from "@/lib/cms-store"
 import { visibleAppointments } from "./use-visible-appointments"
 
-type NavItem = { href: string; label: string; icon: LucideIcon; badge?: boolean }
+type NavItem = { href: string; label: string; icon: LucideIcon; badge?: "appointments" | "outbox" }
 type NavGroup = { label: string; items: NavItem[] }
 
 const adminNav: NavGroup[] = [
@@ -52,7 +54,7 @@ const adminNav: NavGroup[] = [
     label: "Overview",
     items: [
       { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/admin/appointments", label: "Appointments", icon: CalendarClock, badge: true },
+      { href: "/admin/appointments", label: "Appointments", icon: CalendarClock, badge: "appointments" },
       { href: "/admin/calendar", label: "Calendar", icon: CalendarDays },
     ],
   },
@@ -65,6 +67,13 @@ const adminNav: NavGroup[] = [
       { href: "/admin/treatments", label: "Treatments", icon: Stethoscope },
       { href: "/admin/dentists", label: "Dentists & hours", icon: UserRound },
       { href: "/admin/faqs", label: "FAQs", icon: HelpCircle },
+    ],
+  },
+  {
+    label: "Messaging",
+    items: [
+      { href: "/admin/templates", label: "Message templates", icon: MessageSquareText },
+      { href: "/admin/outbox", label: "Outbox", icon: Send, badge: "outbox" },
     ],
   },
   {
@@ -81,7 +90,7 @@ const dentistNav: NavGroup[] = [
     label: "My practice",
     items: [
       { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/admin/appointments", label: "My appointments", icon: CalendarClock, badge: true },
+      { href: "/admin/appointments", label: "My appointments", icon: CalendarClock, badge: "appointments" },
       { href: "/admin/calendar", label: "My calendar", icon: CalendarDays },
       { href: "/admin/my-profile", label: "My profile & hours", icon: UserRound },
     ],
@@ -101,7 +110,7 @@ export function useAdminUser(): AdminUser {
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const session = useSession()
   const router = useRouter()
-  const { content, accounts, appointments, ready, updateAccounts } = useCms()
+  const { content, accounts, appointments, outbox, ready, updateAccounts } = useCms()
 
   // A dentist account that was disabled or deleted loses access immediately.
   const account = session?.role === "dentist" ? accounts.find((a) => a.id === session.accountId) : undefined
@@ -131,7 +140,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const signedIn = !!session && !revoked
   const nav = session?.role === "dentist" ? dentistNav : adminNav
   const user: AdminUser | null = session ? { session, isAdmin: session.role === "admin", dentist } : null
-  const newCount = user ? visibleAppointments(appointments, user).filter((a) => a.status === "new").length : 0
+  const badges = {
+    appointments: user ? visibleAppointments(appointments, user).filter((a) => a.status === "new").length : 0,
+    outbox: outbox.filter((m) => m.status === "queued" || m.status === "failed").length,
+  }
 
   // The shell always renders (so routes prerender), but stays hidden until the session is confirmed.
   return (
@@ -162,7 +174,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </SidebarHeader>
           <SidebarContent>
             <Suspense>
-              <NavGroups groups={nav} newCount={newCount} />
+              <NavGroups groups={nav} badges={badges} />
             </Suspense>
           </SidebarContent>
           <SidebarFooter>
@@ -261,7 +273,7 @@ function useIsActive() {
   return (href: string) => (href === "/admin" ? pathname === "/admin" : pathname.startsWith(href))
 }
 
-function NavGroups({ groups, newCount }: { groups: NavGroup[]; newCount: number }) {
+function NavGroups({ groups, badges }: { groups: NavGroup[]; badges: Record<NonNullable<NavItem["badge"]>, number> }) {
   const isActive = useIsActive()
   return groups.map((g) => (
     <SidebarGroup key={g.label}>
@@ -274,7 +286,7 @@ function NavGroups({ groups, newCount }: { groups: NavGroup[]; newCount: number 
                 <item.icon />
                 <span>{item.label}</span>
               </SidebarMenuButton>
-              {item.badge && newCount > 0 && <SidebarMenuBadge>{newCount}</SidebarMenuBadge>}
+              {item.badge && badges[item.badge] > 0 && <SidebarMenuBadge>{badges[item.badge]}</SidebarMenuBadge>}
             </SidebarMenuItem>
           ))}
         </SidebarMenu>

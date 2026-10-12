@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { CalendarClock, Mail, Phone, TriangleAlert } from "lucide-react"
+import { CalendarClock, ExternalLink, Mail, MessageSquare, Phone, TriangleAlert } from "lucide-react"
 import { toast } from "sonner"
 import { z } from "zod"
 import type { Appointment, AppointmentStatus } from "@/content/schema"
@@ -20,6 +20,9 @@ import { issueMap } from "@/lib/validation"
 import { useAdminUser } from "./admin-shell"
 import { STATUS, StatusBadge, appointmentDentist, preferredLabel, receivedLabel, slotHour } from "./appointment-utils"
 import { ConfirmDelete, Field, FieldMessage } from "./fields"
+import { ChannelIcon, OutboxStatusBadge, manualSendHref, shortTime } from "./outbox-utils"
+import type { NotifyResult } from "@/lib/notifications/dispatch"
+import { EVENT_META } from "@/lib/notifications/templates"
 
 const STATUSES = Object.keys(STATUS) as AppointmentStatus[]
 /** Select value for "Any available" (no dentist). */
@@ -43,11 +46,23 @@ export function StatusSelect({ value, onChange }: { value: AppointmentStatus; on
   )
 }
 
+/** "SMS and email queued" style summary of what a change sent to the patient. */
+export function notifySummary(r: NotifyResult | null): string | undefined {
+  if (!r) return undefined
+  const parts = [
+    r.sent && `${r.sent} sent`,
+    r.queued && `${r.queued} waiting in the Outbox`,
+    r.failed && `${r.failed} failed`,
+    r.skipped && `${r.skipped} not sent (no consent or address)`,
+  ].filter(Boolean)
+  return parts.length ? "Patient messages: " + parts.join(", ") + "." : undefined
+}
+
 export function useSetStatus() {
   const { updateAppointment } = useCms()
   return async (a: Appointment, status: AppointmentStatus) => {
-    await updateAppointment(a.id, { status })
-    toast.success(`${a.name} marked as ${STATUS[status].label.toLowerCase()}`)
+    const result = await updateAppointment(a.id, { status })
+    toast.success(`${a.name} marked as ${STATUS[status].label.toLowerCase()}`, { description: notifySummary(result) })
   }
 }
 
@@ -79,6 +94,8 @@ function SheetBody({ a, onClose }: { a: Appointment; onClose: () => void }) {
         <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-2.5 text-sm">
           {[
             ["Mobile", a.phone],
+            ["Email", a.email || "—"],
+            ["Updates", a.consent ? "Agreed to SMS/email updates" : "Did not opt in to updates"],
             ["Treatment", a.treatment],
             ["Dentist", a.dentist],
             ["Scheduled", preferredLabel(a)],
@@ -94,11 +111,18 @@ function SheetBody({ a, onClose }: { a: Appointment; onClose: () => void }) {
             <Phone /> Call
           </Button>
           <Button variant="outline" size="sm" nativeButton={false} render={<a href={"sms:" + a.phone.replace(/\s/g, "")} />}>
-            <Mail /> Text
+            <MessageSquare /> Text
           </Button>
+          {a.email && (
+            <Button variant="outline" size="sm" nativeButton={false} render={<a href={"mailto:" + a.email} />}>
+              <Mail /> Email
+            </Button>
+          )}
         </div>
         <Separator />
         <ScheduleEditor a={a} />
+        <Separator />
+        <PatientMessages appointmentId={a.id} />
         <Separator />
         <div className="grid gap-2">
           <Label>Patient notes</Label>
@@ -173,7 +197,7 @@ function ScheduleEditor({ a }: { a: Appointment }) {
     setSubmitted(true)
     if (!parsed.success) return
     if (clash) return toast.error("That slot is already booked", { description: `${clash.name} has ${hSlot(h!)} on that day.` })
-    await updateAppointment(a.id, {
+    const result = await updateAppointment(a.id, {
       date: form.date,
       dentist: dentist?.shortName ?? ANY_DENTIST,
       slot: h !== null ? hSlot(h) : "",
@@ -181,7 +205,9 @@ function ScheduleEditor({ a }: { a: Appointment }) {
       time: h !== null ? timeOfDayFor(h, content.booking.timesOfDay) : form.time.slice(4),
     })
     setSubmitted(false)
-    toast.success("Schedule updated", { description: `${a.name} — ${form.date || "any day"}${h !== null ? " · " + hSlot(h) : ""}` })
+    toast.success("Schedule updated", {
+      description: [`${a.name} — ${form.date || "any day"}${h !== null ? " · " + hSlot(h) : ""}`, notifySummary(result)].filter(Boolean).join(" "),
+    })
   }
 
   return (
@@ -267,6 +293,51 @@ function ScheduleEditor({ a }: { a: Appointment }) {
             Reset
           </Button>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** Messages sent (or waiting) for this appointment. */
+function PatientMessages({ appointmentId }: { appointmentId: string }) {
+  const { outbox } = useCms()
+  const { isAdmin } = useAdminUser()
+  const list = outbox.filter((m) => m.appointmentId === appointmentId)
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-sm font-medium">
+          <MessageSquare className="size-4" /> Messages to patient
+        </span>
+        {isAdmin && (
+          <a href="/admin/templates" className="text-xs text-muted-foreground underline underline-offset-2">
+            Edit templates
+          </a>
+        )}
+      </div>
+      {list.length === 0 ? (
+        <p className="text-xs text-muted-foreground">None yet. Confirming, rescheduling, completing or cancelling sends one automatically.</p>
+      ) : (
+        <ul className="grid gap-1.5">
+          {list.map((m) => (
+            <li key={m.id} className="flex items-start gap-2 rounded-md bg-muted/40 px-2.5 py-2 text-xs">
+              <ChannelIcon channel={m.channel} className="mt-0.5 size-3.5" />
+              <div className="grid min-w-0 flex-1 gap-0.5">
+                <span className="font-medium">{EVENT_META[m.event].label}</span>
+                <span className="text-muted-foreground">
+                  {shortTime(m.createdAt)}
+                  {m.note ? ` · ${m.note}` : ""}
+                </span>
+              </div>
+              <OutboxStatusBadge status={m.status} />
+              {m.status === "queued" && m.to && (
+                <a href={manualSendHref(m)} title="Send it yourself from this device" aria-label="Send manually" className="text-muted-foreground hover:text-foreground">
+                  <ExternalLink className="size-3.5" />
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

@@ -1,5 +1,5 @@
 import { createStore, get, set, del, type UseStore } from "idb-keyval"
-import type { Appointment, DentistAccount, SiteContent } from "@/content/schema"
+import type { Appointment, DentistAccount, NotificationConfig, OutboxMessage, SiteContent } from "@/content/schema"
 
 /**
  * Persistence boundary for the CMS. Everything else talks to this interface,
@@ -13,11 +13,17 @@ export interface StorageAdapter {
   saveAppointments(list: Appointment[]): Promise<void>
   loadAccounts(): Promise<DentistAccount[]>
   saveAccounts(list: DentistAccount[]): Promise<void>
+  loadNotificationConfig(): Promise<NotificationConfig | null>
+  saveNotificationConfig(config: NotificationConfig): Promise<void>
+  loadOutbox(): Promise<OutboxMessage[]>
+  saveOutbox(list: OutboxMessage[]): Promise<void>
 }
 
 const CONTENT_KEY = "content"
 const APPOINTMENTS_KEY = "appointments"
 const ACCOUNTS_KEY = "accounts"
+const NOTIFICATIONS_KEY = "notifications"
+const OUTBOX_KEY = "outbox"
 
 let idb: UseStore | null = null
 const db = () => (idb ??= createStore("cme-cms", "kv"))
@@ -36,12 +42,25 @@ export const browserStorage: StorageAdapter = {
     return (await get<DentistAccount[]>(ACCOUNTS_KEY, db())) ?? []
   },
   saveAccounts: (list) => set(ACCOUNTS_KEY, list, db()),
+  async loadNotificationConfig() {
+    return (await get<NotificationConfig>(NOTIFICATIONS_KEY, db())) ?? null
+  },
+  saveNotificationConfig: (config) => set(NOTIFICATIONS_KEY, config, db()),
+  async loadOutbox() {
+    return (await get<OutboxMessage[]>(OUTBOX_KEY, db())) ?? []
+  },
+  saveOutbox: (list) => set(OUTBOX_KEY, list, db()),
 }
 
 export const storage: StorageAdapter = browserStorage
 
 /** Notifies other open tabs (e.g. the public site while editing in /admin). */
-export type SyncMessage = { type: "content" } | { type: "appointments" } | { type: "accounts" }
+export type SyncMessage =
+  | { type: "content" }
+  | { type: "appointments" }
+  | { type: "accounts" }
+  | { type: "notifications" }
+  | { type: "outbox" }
 
 export function syncChannel(): BroadcastChannel | null {
   return typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel("cme-cms")

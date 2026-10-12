@@ -161,6 +161,10 @@ export const appointmentSchema = z.object({
   slotKey: z.string(),
   notes: z.string(),
   status: appointmentStatus,
+  /** Optional email for updates (older requests have none). */
+  email: z.string().default(""),
+  /** Patient agreed to receive appointment updates by SMS/email. */
+  consent: z.boolean().default(false),
 })
 
 /** Login for a dentist, linked to one dentist profile. Passwords are stored as PBKDF2 hashes. */
@@ -176,10 +180,56 @@ export const dentistAccountSchema = z.object({
   lastLoginAt: z.string().nullable(),
 })
 
+/* ── Notifications ─────────────────────────────────────────────────────────── */
+
+export const NOTIFICATION_EVENTS = ["request_received", "confirmed", "rescheduled", "reminder", "completed", "cancelled"] as const
+export const notificationEvent = z.enum(NOTIFICATION_EVENTS)
+export const notificationChannel = z.enum(["sms", "email"])
+
+export const messageTemplateSchema = z.object({
+  id: z.string(),
+  event: notificationEvent,
+  channel: notificationChannel,
+  enabled: z.boolean(),
+  /** Email only. */
+  subject: z.string(),
+  body: z.string(),
+  updatedAt: z.string(),
+})
+
+export const notificationConfigSchema = z.object({
+  channels: z.object({ sms: z.boolean(), email: z.boolean() }),
+  /** Shown as the SMS sender (when the provider supports a sender name) and email "From" name. */
+  senderName: z.string(),
+  /** Where patients' email replies go. */
+  replyTo: z.string(),
+  templates: z.array(messageTemplateSchema),
+})
+
+export const outboxStatus = z.enum(["queued", "sent", "failed", "skipped"])
+
+/** A rendered message, waiting for (or sent through) the delivery backend. */
+export const outboxMessageSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  appointmentId: z.string(),
+  patientName: z.string(),
+  event: notificationEvent,
+  channel: notificationChannel,
+  to: z.string(),
+  subject: z.string(),
+  body: z.string(),
+  status: outboxStatus,
+  /** Why it was skipped/failed, or how it was sent ("manually"). */
+  note: z.string(),
+  sentAt: z.string().nullable(),
+})
+
 export const backupSchema = z.object({
   content: siteContentSchema,
   appointments: z.array(appointmentSchema).optional(),
   accounts: z.array(dentistAccountSchema).optional(),
+  notifications: notificationConfigSchema.optional(),
 })
 
 export type SiteContent = z.output<typeof storedContentSchema>
@@ -190,3 +240,9 @@ export type HourRange = z.infer<typeof hourRange>
 export type Appointment = z.infer<typeof appointmentSchema>
 export type AppointmentStatus = z.infer<typeof appointmentStatus>
 export type DentistAccount = z.infer<typeof dentistAccountSchema>
+export type NotificationEvent = z.infer<typeof notificationEvent>
+export type NotificationChannel = z.infer<typeof notificationChannel>
+export type MessageTemplate = z.infer<typeof messageTemplateSchema>
+export type NotificationConfig = z.infer<typeof notificationConfigSchema>
+export type OutboxStatus = z.infer<typeof outboxStatus>
+export type OutboxMessage = z.infer<typeof outboxMessageSchema>

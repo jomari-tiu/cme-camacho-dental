@@ -6,12 +6,19 @@ import { migrateContent } from "@/content/migrate"
 import {
   appointmentSchema,
   dentistAccountSchema,
+  notificationConfigSchema,
+  outboxMessageSchema,
   siteContentSchema,
   storedContentSchema,
   type Appointment,
   type DentistAccount,
+  type NotificationConfig,
+  type NotificationEvent,
+  type OutboxMessage,
   type SiteContent,
 } from "@/content/schema"
+import { buildMessages, deliver, eventForChange, summarize, type NotifyResult } from "@/lib/notifications/dispatch"
+import { defaultNotificationConfig, withAllTemplates } from "@/lib/notifications/templates"
 import { storage, syncChannel, type SyncMessage } from "@/lib/storage"
 
 type CmsContextValue = {
@@ -22,12 +29,17 @@ type CmsContextValue = {
   resetContent: () => Promise<void>
   appointments: Appointment[]
   addAppointment: (a: Omit<Appointment, "id" | "createdAt" | "status">) => Promise<Appointment>
-  updateAppointment: (id: string, patch: Partial<Appointment>) => Promise<void>
+  /** Resolves to what was sent to the patient, if the change triggers a notification. */
+  updateAppointment: (id: string, patch: Partial<Appointment>) => Promise<NotifyResult | null>
   deleteAppointment: (id: string) => Promise<void>
   replaceAppointments: (list: Appointment[]) => Promise<void>
   accounts: DentistAccount[]
   /** Applies an update to the latest stored accounts list. */
   updateAccounts: (update: (prev: DentistAccount[]) => DentistAccount[]) => Promise<void>
+  notificationConfig: NotificationConfig
+  saveNotificationConfig: (config: NotificationConfig) => Promise<void>
+  outbox: OutboxMessage[]
+  updateOutbox: (update: (prev: OutboxMessage[]) => OutboxMessage[]) => Promise<void>
 }
 
 const CmsContext = createContext<CmsContextValue | null>(null)
@@ -62,21 +74,45 @@ export async function readAccounts(): Promise<DentistAccount[]> {
   })
 }
 
+export async function readNotificationConfig(): Promise<NotificationConfig> {
+  const parsed = notificationConfigSchema.safeParse(await storage.loadNotificationConfig())
+  return withAllTemplates(parsed.success ? parsed.data : defaultNotificationConfig())
+}
+
+async function readOutbox(): Promise<OutboxMessage[]> {
+  return (await storage.loadOutbox()).flatMap((m) => {
+    const parsed = outboxMessageSchema.safeParse(m)
+    return parsed.success ? [parsed.data] : []
+  })
+}
+
+/** Keep the outbox from growing forever in browser storage. */
+const OUTBOX_LIMIT = 500
+
 export function CmsProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
   const [content, setContent] = useState<SiteContent>(defaultContent)
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [accounts, setAccounts] = useState<DentistAccount[]>([])
+  const [notificationConfig, setNotificationConfig] = useState<NotificationConfig>(() => defaultNotificationConfig())
+  const [outbox, setOutbox] = useState<OutboxMessage[]>([])
+  // Latest content for rendering messages, without re-creating every callback on each edit.
+  const contentRef = useRef(content)
+  useEffect(() => {
+    contentRef.current = content
+  }, [content])
   const channel = useRef<BroadcastChannel | null>(null)
 
   useEffect(() => {
     let alive = true
-    Promise.all([readContent(), readAppointments(), readAccounts()])
-      .then(([c, a, acc]) => {
+    Promise.all([readContent(), readAppointments(), readAccounts(), readNotificationConfig(), readOutbox()])
+      .then(([c, a, acc, nc, ob]) => {
         if (!alive) return
         setContent(c)
         setAppointments(a)
         setAccounts(acc)
+        setNotificationConfig(nc)
+        setOutbox(ob)
       })
       .catch((err) => console.error("[cms] failed to load", err))
       .finally(() => alive && setReady(true))
@@ -88,6 +124,8 @@ export function CmsProvider({ children }: { children: React.ReactNode }) {
         if (e.data.type === "content") readContent().then(setContent)
         if (e.data.type === "appointments") readAppointments().then(setAppointments)
         if (e.data.type === "accounts") readAccounts().then(setAccounts)
+        if (e.data.type === "notifications") readNotificationConfig().then(setNotificationConfig)
+        if (e.data.type === "outbox") readOutbox().then(setOutbox)
       }
     }
     return () => {
@@ -126,19 +164,68 @@ export function CmsProvider({ children }: { children: React.ReactNode }) {
     [notify],
   )
 
+  const updateOutbox = useCallback(
+    async (update: (prev: OutboxMessage[]) => OutboxMessage[]) => {
+      const next = update(await readOutbox()).slice(0, OUTBOX_LIMIT)
+      await storage.saveOutbox(next)
+      setOutbox(next)
+      notify({ type: "outbox" })
+    },
+    [notify],
+  )
+
+  /** Renders the event's templates for this appointment, hands them to the transport and logs them. */
+  const sendNotifications = useCallback(
+    async (event: NotificationEvent, appt: Appointment): Promise<NotifyResult> => {
+      try {
+        const config = await readNotificationConfig()
+        const messages = await deliver(buildMessages(event, appt, contentRef.current, config))
+        if (messages.length) await updateOutbox((prev) => [...messages, ...prev])
+        return summarize(messages)
+      } catch (err) {
+        console.error("[notifications] failed", err)
+        return { queued: 0, sent: 0, skipped: 0, failed: 1 }
+      }
+    },
+    [updateOutbox],
+  )
+
   const addAppointment = useCallback<CmsContextValue["addAppointment"]>(
     async (a) => {
       const appt: Appointment = { ...a, id: newId(), createdAt: new Date().toISOString(), status: "new" }
       await persistAppointments((prev) => [appt, ...prev])
+      await sendNotifications("request_received", appt)
       return appt
     },
-    [persistAppointments],
+    [persistAppointments, sendNotifications],
   )
 
   const updateAppointment = useCallback(
-    (id: string, patch: Partial<Appointment>) =>
-      persistAppointments((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch, id } : a))),
-    [persistAppointments],
+    async (id: string, patch: Partial<Appointment>) => {
+      let before: Appointment | undefined
+      let after: Appointment | undefined
+      await persistAppointments((prev) =>
+        prev.map((a) => {
+          if (a.id !== id) return a
+          before = a
+          after = { ...a, ...patch, id }
+          return after
+        }),
+      )
+      const event = before && after ? eventForChange(before, after) : null
+      return event && after ? sendNotifications(event, after) : null
+    },
+    [persistAppointments, sendNotifications],
+  )
+
+  const saveNotificationConfig = useCallback(
+    async (config: NotificationConfig) => {
+      const valid = notificationConfigSchema.parse(config)
+      await storage.saveNotificationConfig(valid)
+      setNotificationConfig(valid)
+      notify({ type: "notifications" })
+    },
+    [notify],
   )
 
   const deleteAppointment = useCallback(
@@ -174,6 +261,10 @@ export function CmsProvider({ children }: { children: React.ReactNode }) {
       replaceAppointments,
       accounts,
       updateAccounts,
+      notificationConfig,
+      saveNotificationConfig,
+      outbox,
+      updateOutbox,
     }),
     [
       ready,
@@ -187,6 +278,10 @@ export function CmsProvider({ children }: { children: React.ReactNode }) {
       replaceAppointments,
       accounts,
       updateAccounts,
+      notificationConfig,
+      saveNotificationConfig,
+      outbox,
+      updateOutbox,
     ],
   )
 

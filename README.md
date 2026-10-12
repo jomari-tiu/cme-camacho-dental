@@ -20,7 +20,14 @@ npm run dev                  # http://localhost:3000  ·  admin: http://localhos
 | Dentists & hours | Profile, portrait, specialties, schedule colour, weekly hours (drive the live schedule) |
 | FAQs | Add / edit / reorder / delete |
 | Dentist accounts | Create logins linked to a dentist profile, edit, reset password, disable, delete |
+| Message templates | SMS + email template per event (request received, confirmed, rescheduled, reminder, completed, cancelled): on/off, variables, live preview, SMS length counter, restore default; channel on/off, sender name, reply-to |
+| Outbox | Every patient SMS/email prepared by the system: waiting / sent / failed / not sent, open in SMS or email app to send by hand, mark as sent, retry |
 | Settings & backup | Export / import JSON backup, reset content, clear appointments |
+
+## Patient notifications (SMS & email)
+- Triggers: a new booking request, and status/schedule changes on an appointment (Confirmed, rescheduled, Done, Cancelled). The day-before reminder template is ready but needs a backend job.
+- Only patients who tick the consent box on the booking form are messaged; others are logged as "Not sent".
+- Delivery goes through `src/lib/notifications/transport.ts`. Without `NEXT_PUBLIC_NOTIFICATIONS_API_URL` messages wait in the Outbox. When it is set, each message is POSTed there as `{ id, channel, to, subject, body, event, appointmentId }` and the backend delivers it (e.g. Android SMS gateway with the clinic SIM, or an SMS/email provider).
 
 ## Roles
 - **Clinic admin** — signs in with `NEXT_PUBLIC_ADMIN_EMAIL` / `NEXT_PUBLIC_ADMIN_PASSWORD`; full access.

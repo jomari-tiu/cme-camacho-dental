@@ -63,7 +63,7 @@ export function Booking({ content }: { content: SiteContent }) {
     if (Object.keys(validate(form)).length) return
     setSubmitting(true)
     try {
-      await addAppointment({ ...form, name: form.name.trim(), phone: form.phone.trim() })
+      await addAppointment({ ...form, name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim().toLowerCase() })
       setSent(true)
       setErr("")
     } catch {
@@ -97,7 +97,7 @@ export function Booking({ content }: { content: SiteContent }) {
         </div>
 
         {!sent ? (
-          <form onSubmit={submit} className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,200px),1fr))] content-start gap-3">
+          <form onSubmit={submit} noValidate className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,200px),1fr))] content-start gap-3">
             <label className={labelCls}>
               Full name
               <input
@@ -191,6 +191,20 @@ export function Booking({ content }: { content: SiteContent }) {
               </>
             )}
             <label className={`${labelCls} col-span-full`}>
+              Email (optional)
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={form.email}
+                onChange={set("email")}
+                placeholder="juan@example.com"
+                aria-invalid={!!errors.email}
+                className={`${field} ${errors.email ? invalid : ""}`}
+              />
+              <FieldError message={errors.email} />
+            </label>
+            <label className={`${labelCls} col-span-full`}>
               Notes (optional)
               <textarea
                 value={form.notes}
@@ -202,6 +216,17 @@ export function Booking({ content }: { content: SiteContent }) {
                 className={`${field} resize-y ${errors.notes ? invalid : ""}`}
               />
               <FieldError message={errors.notes} />
+            </label>
+            <label className="col-span-full flex cursor-pointer items-start gap-3 text-[14px] leading-[1.45] text-ink-faint">
+              <input
+                type="checkbox"
+                checked={form.consent}
+                onChange={(e) => update((f) => ({ ...f, consent: e.target.checked }))}
+                className="mt-0.5 size-[18px] flex-none cursor-pointer accent-[oklch(0.88_0.08_175)]"
+              />
+              <span>
+                Send me appointment updates by SMS{form.email ? " and email" : ""} (confirmation, changes and reminders). You can reply STOP anytime.
+              </span>
             </label>
             {err && <div className="col-span-full text-[14px] text-error-soft">{err}</div>}
             <button
